@@ -24,6 +24,7 @@ import random as rn
 import os
 import csv
 import pprint
+import matplotlib.pyplot as plt
 from util_functions import *
 # Seed Random Numbers
 os.environ['PYTHONHASHSEED']=str(SEED)
@@ -88,6 +89,82 @@ def compileModel(model,lr):
     # optimizer = SGD(learning_rate=lr, momentum=0.0, decay=0.0, nesterov=False)
     optimizer = Adam(learning_rate=lr, beta_1=0.9, beta_2=0.999, epsilon=None, decay=0.0, amsgrad=False)
     model.compile(loss='binary_crossentropy', optimizer=optimizer,metrics=['accuracy'])  # here we specify the loss function
+
+def plot_training_history(grid_search, model_name, output_folder, time_window, max_flow_len):
+    """
+    Plot and save training/validation accuracy and loss curves from GridSearchCV results.
+    
+    Args:
+        grid_search: Fitted GridSearchCV object
+        model_name: Name of the model
+        output_folder: Directory to save plots
+        time_window: Time window parameter
+        max_flow_len: Maximum flow length parameter
+    """
+    # Get the best model's history
+    best_model = grid_search.best_estimator_.model
+    
+    # Access the history from the model's history attribute
+    try:
+        history = best_model.history.history
+    except AttributeError:
+        print("Warning: Could not access history directly. Trying alternative method...")
+        try:
+            history = grid_search.cv_results_
+            print("Available metrics:", history.keys())
+            return
+        except:
+            print("Error: Could not access training history")
+            return
+
+    if history is None or len(history) == 0:
+        print("Error: No training history found")
+        return
+
+    # Create figure with two subplots
+    plt.figure(figsize=(12, 5))
+    
+    # Plot training & validation metrics if available
+    metrics = {}
+    for key in history.keys():
+        if 'loss' in key:
+            metrics.setdefault('loss', []).append(key)
+        if 'acc' in key:
+            metrics.setdefault('acc', []).append(key)
+
+    epochs = range(1, len(next(iter(history.values()))) + 1)
+    
+    # Plot accuracy
+    plt.subplot(1, 2, 1)
+    for metric in metrics.get('acc', []):
+        if 'val' in metric:
+            plt.plot(epochs, history[metric], 'r-', label='Validation Accuracy')
+        else:
+            plt.plot(epochs, history[metric], 'b-', label='Training Accuracy')
+    plt.title(f'{model_name}\nAccuracy Over Epochs')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.legend(loc='lower right')
+    plt.grid(True)
+    
+    # Plot loss
+    plt.subplot(1, 2, 2)
+    for metric in metrics.get('loss', []):
+        if 'val' in metric:
+            plt.plot(epochs, history[metric], 'r-', label='Validation Loss')
+        else:
+            plt.plot(epochs, history[metric], 'b-', label='Training Loss')
+    plt.title(f'{model_name}\nLoss Over Epochs')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend(loc='upper right')
+    plt.grid(True)
+    
+    # Adjust layout and save
+    plt.tight_layout()
+    plot_filename = f"{output_folder}{time_window}t-{max_flow_len}n-{model_name}-training_history.png"
+    plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
+    plt.close()
 
 def main(argv):
     help_string = 'Usage: python3 lucid_cnn.py --train <dataset_folder> -e <epocs>'
@@ -164,7 +241,7 @@ def main(argv):
             best_model_filename = OUTPUT_FOLDER + str(time_window) + 't-' + str(max_flow_len) + 'n-' + model_name
             mc = ModelCheckpoint(best_model_filename + '.h5', monitor='val_accuracy', mode='max', verbose=1, save_best_only=True)
             # With K-Fold cross-validation, the validation set is only used for early stopping
-            rnd_search_cv.fit(X_train, Y_train, epochs=args.epochs, validation_data=(X_val, Y_val), callbacks=[es, mc])
+            history = rnd_search_cv.fit(X_train, Y_train, epochs=args.epochs, validation_data=(X_val, Y_val), callbacks=[es, mc])
 
             # With refit=True (default) GridSearchCV refits the model on the whole training set (no folds) with the best
             # hyper-parameters and makes the resulting model available as rnd_search_cv.best_estimator_.model
@@ -175,6 +252,20 @@ def main(argv):
 
             # Alternatively, to save time, one could set refit=False and load the best model from the filesystem to test its performance
             #best_model = load_model(best_model_filename + '.h5')
+
+            try:
+              plot_training_history(rnd_search_cv, model_name, OUTPUT_FOLDER, time_window, max_flow_len)
+            except Exception as e:
+              print(f"Error plotting history: {str(e)}")
+              # Print available attributes
+              print("\nAvailable attributes in GridSearchCV:")
+              for attr in dir(rnd_search_cv):
+                if not attr.startswith('_'):
+                  print(attr)
+              # Print available cv_results_ keys
+              print("\nAvailable cv_results_ keys:")
+              if hasattr(rnd_search_cv, 'cv_results_'):
+                print(rnd_search_cv.cv_results_.keys())
 
             Y_pred_val = (best_model.predict(X_val) > 0.5)
             Y_true_val = Y_val.reshape((Y_val.shape[0], 1))
